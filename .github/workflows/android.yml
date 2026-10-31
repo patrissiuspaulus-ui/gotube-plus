@@ -1,0 +1,42 @@
+name: Android APK
+run-name: GoTube Plus APK (${{ github.ref_name }})
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+      - name: Upload APK
+        id: upload-apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotube-plus-v1.0.0-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Add download details
+        if: success()
+        run: |
+          echo "## GoTube Plus APK siap diunduh" >> "$GITHUB_STEP_SUMMARY"
+          echo "[Unduh APK GoTube Plus](${{ steps.upload-apk.outputs.artifact-url }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "Artifact gotube-plus-v1.0.0-${GITHUB_RUN_NUMBER} tersedia selama 30 hari." >> "$GITHUB_STEP_SUMMARY"
