@@ -28,7 +28,9 @@ jobs:
       - name: Install Android platform
         run: yes | sdkmanager --install "platforms;android-36" "build-tools;35.0.0"
       - name: Build debug APK
-        run: ./gradlew --no-daemon assembleDebug
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: ./gradlew --no-daemon lintDebug assembleDebug
       - name: Upload APK
         id: upload-apk
         uses: actions/upload-artifact@v4

@@ -4,6 +4,7 @@ import android.app.PictureInPictureParams
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
@@ -28,6 +29,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,12 +59,14 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -85,6 +90,7 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 private val AccentRed = Color(0xFFE53935)
 private val DarkBackground = Color(0xFF101010)
@@ -122,6 +128,7 @@ class MainActivity : ComponentActivity() {
                 GoTubeApp(
                     store = libraryStore,
                     controller = mediaController,
+                    youtubeRepository = YouTubeRepository(),
                     darkMode = darkMode,
                     onDarkModeChange = {
                         darkMode = it
@@ -191,16 +198,19 @@ private enum class AppTab(val label: String) {
 private fun GoTubeApp(
     store: LibraryStore,
     controller: MediaController?,
+    youtubeRepository: YouTubeRepository,
     darkMode: Boolean,
     onDarkModeChange: (Boolean) -> Unit,
     onEnterPictureInPicture: () -> Unit
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
-    var activeVideoId by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeVideo by remember { mutableStateOf<VideoItem?>(null) }
     var pendingPlaybackId by remember { mutableStateOf<String?>(null) }
     var searchText by rememberSaveable { mutableStateOf("") }
-    var favorites by remember { mutableStateOf(store.favorites()) }
-    var history by remember { mutableStateOf(store.history()) }
+    val favoriteVideos by store.favoriteVideos.collectAsState(initial = emptyList())
+    val history by store.historyVideos.collectAsState(initial = emptyList())
+    val favorites = favoriteVideos.mapTo(mutableSetOf()) { it.id }
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
     LaunchedEffect(controller, pendingPlaybackId) {
@@ -215,12 +225,12 @@ private fun GoTubeApp(
         }
     }
 
-    BackHandler(enabled = activeVideoId != null) { activeVideoId = null }
+    BackHandler(enabled = activeVideo != null) { activeVideo = null }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (activeVideoId == null) {
+            if (activeVideo == null) {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                     AppTab.entries.forEach { tab ->
                         NavigationBarItem(
@@ -244,67 +254,67 @@ private fun GoTubeApp(
             }
         }
     ) { padding ->
-        if (activeVideoId != null) {
-            val video = VideoCatalog.find(activeVideoId)
-            if (video != null) {
-                PlayerScreen(
-                    video = video,
-                    controller = controller,
-                    onBack = { activeVideoId = null },
-                    onNext = { controller?.seekToNextMediaItem() },
-                    onFullscreen = { toggleFullscreen(context) },
-                    onPip = onEnterPictureInPicture
-                )
-            }
+        if (activeVideo != null) {
+            PlayerScreen(
+                video = activeVideo!!,
+                controller = controller,
+                onBack = { activeVideo = null },
+                onNext = { controller?.seekToNextMediaItem() },
+                onFullscreen = { toggleFullscreen(context) },
+                onPip = onEnterPictureInPicture
+            )
         } else {
             when (selectedTab) {
                 AppTab.HOME -> HomeScreen(
                     padding = padding,
-                    store = store,
+                    youtubeRepository = youtubeRepository,
                     favorites = favorites,
                     history = history,
                     searchText = searchText,
                     onSearchTextChange = { searchText = it },
                     onSearch = { selectedTab = AppTab.SEARCH },
                     onPlay = { video ->
-                        history = listOf(video.id) + history.filterNot { it == video.id }
-                        store.addToHistory(video.id)
-                        activeVideoId = video.id
-                        pendingPlaybackId = video.id
+                        scope.launch { store.addToHistory(video) }
+                        if (video.isYouTube) controller?.pause()
+                        activeVideo = video
+                        pendingPlaybackId = video.id.takeUnless { video.isYouTube }
                     },
-                    onFavorite = { favorites = store.toggleFavorite(it) }
+                    onFavorite = { video -> scope.launch { store.toggleFavorite(video) } }
                 )
                 AppTab.SEARCH -> SearchScreen(
                     padding = padding,
+                    repository = youtubeRepository,
                     query = searchText,
                     onQueryChange = { searchText = it },
                     onPlay = { video ->
-                        history = listOf(video.id) + history.filterNot { it == video.id }
-                        store.addToHistory(video.id)
-                        activeVideoId = video.id
-                        pendingPlaybackId = video.id
+                        scope.launch { store.addToHistory(video) }
+                        if (video.isYouTube) controller?.pause()
+                        activeVideo = video
+                        pendingPlaybackId = video.id.takeUnless { video.isYouTube }
                     },
-                    onFavorite = { favorites = store.toggleFavorite(it) },
+                    onFavorite = { video -> scope.launch { store.toggleFavorite(video) } },
                     favorites = favorites
                 )
                 AppTab.LIBRARY -> LibraryScreen(
                     padding = padding,
-                    favorites = favorites,
+                    favoriteVideos = favoriteVideos,
                     history = history,
                     onPlay = { video ->
-                        history = listOf(video.id) + history.filterNot { it == video.id }
-                        store.addToHistory(video.id)
-                        activeVideoId = video.id
-                        pendingPlaybackId = video.id
+                        scope.launch { store.addToHistory(video) }
+                        if (video.isYouTube) controller?.pause()
+                        activeVideo = video
+                        pendingPlaybackId = video.id.takeUnless { video.isYouTube }
                     },
-                    onFavorite = { favorites = store.toggleFavorite(it) }
+                    onFavorite = { video -> scope.launch { store.toggleFavorite(video) } },
+                    onClearHistory = { scope.launch { store.clearHistory() } }
                 )
                 AppTab.SETTINGS -> SettingsScreen(
                     padding = padding,
                     darkMode = darkMode,
                     onDarkModeChange = onDarkModeChange,
                     pipEnabled = store.pictureInPictureEnabled(),
-                    onPipChange = store::setPictureInPictureEnabled
+                    onPipChange = store::setPictureInPictureEnabled,
+                    youtubeApiConfigured = youtubeRepository.isConfigured
                 )
             }
         }
@@ -314,15 +324,38 @@ private fun GoTubeApp(
 @Composable
 private fun HomeScreen(
     padding: PaddingValues,
-    store: LibraryStore,
+    youtubeRepository: YouTubeRepository,
     favorites: Set<String>,
-    history: List<String>,
+    history: List<VideoItem>,
     searchText: String,
     onSearchTextChange: (String) -> Unit,
     onSearch: () -> Unit,
     onPlay: (VideoItem) -> Unit,
-    onFavorite: (String) -> Unit
+    onFavorite: (VideoItem) -> Unit
 ) {
+    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    var videos by remember { mutableStateOf(VideoCatalog.items) }
+    var isLoading by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(selectedCategory, youtubeRepository) {
+        if (!youtubeRepository.isConfigured) {
+            videos = VideoCatalog.items
+            message = "Katalog demo ditampilkan. Tambahkan YOUTUBE_API_KEY untuk rekomendasi YouTube."
+            return@LaunchedEffect
+        }
+        isLoading = true
+        try {
+            videos = youtubeRepository.search("video populer Indonesia", selectedCategory).videos
+            message = null
+        } catch (error: YouTubeApiException) {
+            videos = VideoCatalog.items
+            message = error.message
+        } finally {
+            isLoading = false
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(padding),
         contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 20.dp),
@@ -342,17 +375,29 @@ private fun HomeScreen(
         item {
             SearchField(value = searchText, onValueChange = onSearchTextChange, onSubmit = onSearch, showMic = false)
         }
+        item {
+            CategorySelector(selectedCategory) { selectedCategory = it }
+        }
+        item {
+            SectionTitle(
+                if (youtubeRepository.isConfigured) "Rekomendasi YouTube" else "Video demo",
+                YouTubeCategories.firstOrNull { it.id == selectedCategory }?.name ?: "Untukmu"
+            )
+            if (isLoading) Text("Memuat video…", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+            message?.let {
+                Text(it, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f), fontSize = 12.sp)
+            }
+        }
         if (history.isNotEmpty()) {
             item {
                 SectionTitle("Lanjutkan menonton", "Riwayat terbaru")
-                VideoCatalog.find(history.first())?.let { video ->
-                    VideoCard(video, isFavorite = favorites.contains(video.id), onPlay = { onPlay(video) }, onFavorite = { onFavorite(video.id) })
+                history.firstOrNull()?.let { video ->
+                    VideoCard(video, isFavorite = favorites.contains(video.id), onPlay = { onPlay(video) }, onFavorite = { onFavorite(video) })
                 }
             }
         }
-        item { SectionTitle("Pilihan untukmu", "Video demo dari sumber media terbuka") }
-        items(VideoCatalog.items, key = VideoItem::id) { video ->
-            VideoCard(video, favorites.contains(video.id), { onPlay(video) }, { onFavorite(video.id) })
+        items(videos, key = VideoItem::id) { video ->
+            VideoCard(video, favorites.contains(video.id), { onPlay(video) }, { onFavorite(video) })
         }
     }
 }
@@ -360,24 +405,59 @@ private fun HomeScreen(
 @Composable
 private fun SearchScreen(
     padding: PaddingValues,
+    repository: YouTubeRepository,
     query: String,
     onQueryChange: (String) -> Unit,
     onPlay: (VideoItem) -> Unit,
-    onFavorite: (String) -> Unit,
+    onFavorite: (VideoItem) -> Unit,
     favorites: Set<String>
 ) {
     val context = LocalContext.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val scope = rememberCoroutineScope()
+    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    var results by remember { mutableStateOf(VideoCatalog.items) }
+    var nextPageToken by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val recognized = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (!recognized.isNullOrBlank()) onQueryChange(recognized)
     }
-    val results = remember(query) {
+    val localResults = remember(query) {
         val terms = query.trim().lowercase(Locale("id", "ID"))
         if (terms.isBlank()) VideoCatalog.items else VideoCatalog.items.filter {
             "${it.title} ${it.creator} ${it.description}".lowercase(Locale("id", "ID")).contains(terms)
+        }
+    }
+
+    LaunchedEffect(query, selectedCategory, repository) {
+        nextPageToken = null
+        if (query.isBlank()) {
+            results = VideoCatalog.items
+            message = if (repository.isConfigured) "Ketik kata kunci untuk mencari YouTube." else "Tambahkan YOUTUBE_API_KEY untuk pencarian YouTube."
+            return@LaunchedEffect
+        }
+        if (!repository.isConfigured) {
+            results = localResults
+            message = "Hasil demo lokal. Konfigurasikan YOUTUBE_API_KEY untuk mencari YouTube."
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(400)
+        isLoading = true
+        message = null
+        try {
+            val page = repository.search(query, selectedCategory)
+            results = page.videos
+            nextPageToken = page.nextPageToken
+            if (results.isEmpty()) message = "Tidak ada hasil untuk pencarian ini."
+        } catch (error: YouTubeApiException) {
+            results = emptyList()
+            message = error.message ?: "Pencarian YouTube gagal."
+        } finally {
+            isLoading = false
         }
     }
 
@@ -402,13 +482,42 @@ private fun SearchScreen(
                 }
             }
         )
-        Text("${results.size} hasil", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f), fontSize = 13.sp)
-        if (results.isEmpty()) {
-            EmptyState("Tidak ada video yang cocok.")
+        CategorySelector(selectedCategory) { selectedCategory = it }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("${results.size} hasil", color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f), fontSize = 13.sp)
+            if (isLoading) Text("Memuat…", color = AccentRed, fontSize = 12.sp)
+        }
+        message?.let {
+            Text(it, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f), fontSize = 12.sp)
+        }
+        if (results.isEmpty() && !isLoading) {
+            EmptyState(message ?: "Tidak ada video yang cocok.")
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(results, key = VideoItem::id) { video ->
-                    VideoCard(video, favorites.contains(video.id), { onPlay(video) }, { onFavorite(video.id) })
+                    VideoCard(video, favorites.contains(video.id), { onPlay(video) }, { onFavorite(video) })
+                }
+            }
+            if (nextPageToken != null) {
+                TextButton(
+                    enabled = !isLoading,
+                    onClick = {
+                        val token = nextPageToken ?: return@TextButton
+                        scope.launch {
+                            isLoading = true
+                            try {
+                                val page = repository.search(query, selectedCategory, token)
+                                results = results + page.videos
+                                nextPageToken = page.nextPageToken
+                            } catch (error: YouTubeApiException) {
+                                message = error.message ?: "Tidak dapat memuat halaman berikutnya."
+                            } finally {
+                                isLoading = false
+                            }
+                        }
+                    }
+                ) {
+                    Text(if (isLoading) "Memuat…" else "Muat lebih banyak")
                 }
             }
         }
@@ -418,19 +527,23 @@ private fun SearchScreen(
 @Composable
 private fun LibraryScreen(
     padding: PaddingValues,
-    favorites: Set<String>,
-    history: List<String>,
+    favoriteVideos: List<VideoItem>,
+    history: List<VideoItem>,
     onPlay: (VideoItem) -> Unit,
-    onFavorite: (String) -> Unit
+    onFavorite: (VideoItem) -> Unit,
+    onClearHistory: () -> Unit
 ) {
     var showHistory by rememberSaveable { mutableStateOf(false) }
-    val videos = if (showHistory) history.mapNotNull(VideoCatalog::find) else VideoCatalog.items.filter { it.id in favorites }
+    val videos = if (showHistory) history else favoriteVideos
     Column(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 18.dp, vertical = 16.dp)) {
         Text("Koleksi", fontSize = 25.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(14.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CollectionTab("Favorit", selected = !showHistory) { showHistory = false }
             CollectionTab("Riwayat", selected = showHistory) { showHistory = true }
+            if (showHistory && history.isNotEmpty()) {
+                TextButton(onClick = onClearHistory) { Text("Hapus riwayat", color = AccentRed) }
+            }
         }
         Spacer(Modifier.height(16.dp))
         if (videos.isEmpty()) {
@@ -438,9 +551,25 @@ private fun LibraryScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(videos, key = VideoItem::id) { video ->
-                    VideoCard(video, video.id in favorites, { onPlay(video) }, { onFavorite(video.id) })
+                    VideoCard(video, favoriteVideos.any { it.id == video.id }, { onPlay(video) }, { onFavorite(video) })
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CategorySelector(selectedId: String?, onSelect: (String?) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        YouTubeCategories.forEach { category ->
+            CollectionTab(
+                label = category.name,
+                selected = category.id == selectedId,
+                onClick = { onSelect(category.id) }
+            )
         }
     }
 }
@@ -451,7 +580,8 @@ private fun SettingsScreen(
     darkMode: Boolean,
     onDarkModeChange: (Boolean) -> Unit,
     pipEnabled: Boolean,
-    onPipChange: (Boolean) -> Unit
+    onPipChange: (Boolean) -> Unit,
+    youtubeApiConfigured: Boolean
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 18.dp, vertical = 16.dp),
@@ -461,6 +591,14 @@ private fun SettingsScreen(
         SettingRow("Mode gelap", "Tampilan hitam dengan aksen merah", darkMode, onDarkModeChange)
         SettingRow("Picture-in-Picture", "Jendela mini saat membuka aplikasi lain", pipEnabled, onPipChange)
         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+        Text("YouTube Data API", fontWeight = FontWeight.SemiBold)
+        Text(
+            if (youtubeApiConfigured) "API key terdeteksi. Pencarian YouTube aktif."
+            else "API key belum diatur. Buat secrets.properties dari file contoh atau tambahkan GitHub Secret YOUTUBE_API_KEY.",
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+            fontSize = 13.sp,
+            lineHeight = 19.sp
+        )
         Text("Tentang pemutaran", fontWeight = FontWeight.SemiBold)
         Text(
             "GoTube Plus memutar sumber media langsung yang mengizinkan pemutaran. Katalog saat ini berisi video demo; pencarian YouTube dan kualitas adaptif memerlukan integrasi resmi dan sumber yang mendukungnya.",
@@ -503,11 +641,41 @@ private fun PlayerScreen(
         ) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Kembali") }
             Text(video.title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (!video.isYouTube && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 TextButton(onClick = onPip) { Text("PiP") }
             }
             TextButton(onClick = onFullscreen) { Text("Layar penuh") }
         }
+        if (video.isYouTube) {
+            var embedError by remember(video.youtubeId) { mutableStateOf<Int?>(null) }
+            video.youtubeId?.let { videoId ->
+                YouTubeIframeView(videoId = videoId, onEmbeddingError = { embedError = it })
+            }
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)) {
+                Text(video.title, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(video.creator, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f), fontSize = 14.sp)
+                embedError?.let { code ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        when (code) {
+                            101, 150 -> "Pemilik video tidak mengizinkan pemutaran tersemat."
+                            100 -> "Video tidak tersedia atau bersifat privat."
+                            else -> "Video tidak dapat diputar di sini (kode $code)."
+                        },
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f),
+                        fontSize = 13.sp
+                    )
+                }
+                TextButton(onClick = { openYouTubeVideo(context, video.youtubeId.orEmpty()) }) {
+                    Text("Buka di aplikasi YouTube", color = AccentRed)
+                }
+                Text(
+                    "Pemutaran YouTube mengikuti kontrol dan kebijakan resmi. Audio latar tidak tersedia melalui player tersemat ini.",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                    fontSize = 12.sp
+                )
+            }
+        } else {
         AndroidView(
             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black),
             factory = { viewContext ->
@@ -542,6 +710,7 @@ private fun PlayerScreen(
             Text(video.description, fontSize = 14.sp, lineHeight = 20.sp)
             Spacer(Modifier.height(14.dp))
             Text("Audio dapat tetap diputar di latar belakang melalui notifikasi media.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f))
+        }
         }
     }
 }
@@ -670,5 +839,13 @@ private fun toggleFullscreen(context: android.content.Context) {
         @Suppress("DEPRECATION")
         activity.window.decorView.systemUiVisibility = if (currentlyFullscreen) View.SYSTEM_UI_FLAG_VISIBLE else
             (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
+    }
+}
+
+private fun openYouTubeVideo(context: android.content.Context, videoId: String) {
+    val videoUri = Uri.parse("https://www.youtube.com/watch?v=$videoId")
+    val appIntent = Intent(Intent.ACTION_VIEW, videoUri).setPackage("com.google.android.youtube")
+    runCatching { context.startActivity(appIntent) }.onFailure {
+        context.startActivity(Intent(Intent.ACTION_VIEW, videoUri))
     }
 }

@@ -3,19 +3,23 @@ package com.gotube.plus
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import org.json.JSONObject
 
 data class VideoItem(
     val id: String,
     val title: String,
     val creator: String,
     val description: String,
-    val streamUrl: String,
+    val streamUrl: String?,
     val thumbnailUrl: String,
-    val durationLabel: String
+    val durationLabel: String,
+    val youtubeId: String? = null
 ) {
+    val isYouTube: Boolean get() = youtubeId != null
+
     fun toMediaItem(): MediaItem = MediaItem.Builder()
         .setMediaId(id)
-        .setUri(Uri.parse(streamUrl))
+        .setUri(Uri.parse(checkNotNull(streamUrl) { "Sumber media langsung tidak tersedia" }))
         .setMediaMetadata(
             MediaMetadata.Builder()
                 .setTitle(title)
@@ -24,6 +28,29 @@ data class VideoItem(
                 .build()
         )
         .build()
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("id", id)
+        .put("title", title)
+        .put("creator", creator)
+        .put("description", description)
+        .put("streamUrl", streamUrl)
+        .put("thumbnailUrl", thumbnailUrl)
+        .put("durationLabel", durationLabel)
+        .put("youtubeId", youtubeId)
+
+    companion object {
+        fun fromJson(json: JSONObject): VideoItem = VideoItem(
+            id = json.getString("id"),
+            title = json.getString("title"),
+            creator = json.optString("creator"),
+            description = json.optString("description"),
+            streamUrl = json.optString("streamUrl").takeIf(String::isNotBlank),
+            thumbnailUrl = json.optString("thumbnailUrl"),
+            durationLabel = json.optString("durationLabel"),
+            youtubeId = json.optString("youtubeId").takeIf(String::isNotBlank)
+        )
+    }
 }
 
 object VideoCatalog {
