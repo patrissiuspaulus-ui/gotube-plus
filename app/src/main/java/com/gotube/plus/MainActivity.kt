@@ -124,11 +124,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var darkMode by remember { mutableStateOf(libraryStore.isDarkMode()) }
+            val youtubeRepository = remember { YouTubeRepository() }
             GoTubeTheme(darkMode = darkMode) {
                 GoTubeApp(
                     store = libraryStore,
                     controller = mediaController,
-                    youtubeRepository = YouTubeRepository(),
+                    youtubeRepository = youtubeRepository,
                     darkMode = darkMode,
                     onDarkModeChange = {
                         darkMode = it
