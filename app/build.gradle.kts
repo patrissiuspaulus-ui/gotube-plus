@@ -6,12 +6,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val localProperties = Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.exists()) propertiesFile.inputStream().use { load(it) }
+}
 val localSecrets = Properties().apply {
     val secretsFile = rootProject.file("secrets.properties")
     if (secretsFile.exists()) secretsFile.inputStream().use { load(it) }
 }
 val youtubeApiKey = providers.gradleProperty("YOUTUBE_API_KEY")
     .orElse(providers.environmentVariable("YOUTUBE_API_KEY"))
+    .orElse(localProperties.getProperty("YOUTUBE_API_KEY", ""))
     .orElse(localSecrets.getProperty("YOUTUBE_API_KEY", ""))
     .getOrElse("")
 
