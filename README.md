@@ -1,4 +1,3 @@
-# gotube-plus
 # GoTube Plus
 
 Aplikasi pemutar media Android native untuk Android 6.0 (API 23) ke atas. UI menggunakan Kotlin, Jetpack Compose, dan Material 3; playback dikelola AndroidX Media3.
@@ -12,8 +11,7 @@ Persyaratan: JDK 17 dan Android SDK dengan platform 36 serta Android Build Tools
 ```
 
 APK debug dibuat di `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions membangun APK pada push, pull request, atau workflow dispatch dan mengunggahnya sebagai artifact `gotube-plus-debug-apk`.
-APK debug dibuat di `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions membangun APK pada push, pull request, atau workflow dispatch dan mengunggah artifact bernama `gotube-plus-v1.0.0-<nomor-run>` selama 30 hari. Buka workflow run yang selesai, lalu unduh file dari bagian **Artifacts** atau tautan yang ditampilkan di ringkasan run.
-APK debug dibuat di `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions membangun APK pada push, pull request, atau workflow dispatch dan mengunggah artifact bernama `gotube-plus-v1.0.0-<nomor-run>` selama 30 hari. Ringkasan workflow run menyediakan tautan langsung untuk mengunduh APK.
+Unduh APK langsung dari [GoTubePlus-v1.0.0.apk](GoTubePlus-v1.0.0.apk) di root repository. File ini juga tersedia pada GitHub Release dan artifact Actions.
 
 ## Fitur
 
